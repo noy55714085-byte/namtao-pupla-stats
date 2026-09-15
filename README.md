@@ -111,6 +111,7 @@ GITHUB_TOKEN = "your_github_personal_access_token_here"
 1. ดูคำแนะนำที่ [GitHub Repository](https://github.com/noy55714085-byte/namtao-pupla-stats)
 2. ตั้งค่า `GITHUB_TOKEN` ใน Streamlit Secrets
 3. Deploy ปกติตามขั้นตอน Streamlit Community Cloud
+4. หลังจากตั้งค่า secrets แล้ว แอปจะ redeploy อัตโนมัติเมื่อมีการ push ข้อมูลใหม่ขึ้น GitHub
 
 ## 📝 ข้อควรระวัง
 
