@@ -10,6 +10,13 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 
+# Import GitHub Storage module
+try:
+    from github_storage import load_from_github, save_to_github, github_storage_available
+    GITHUB_STORAGE_AVAILABLE = github_storage_available()
+except ImportError:
+    GITHUB_STORAGE_AVAILABLE = False
+
 DATA_DIR = Path(__file__).resolve().parent / "data"
 DATA_PATH = DATA_DIR / "history.json"
 SQLITE_PATH = DATA_DIR / "history.sqlite"
@@ -57,12 +64,24 @@ def label_dice(dice: list[int]) -> str:
 
 def load() -> dict:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    
+    # ลองโหลดจาก local ก่อน
     if DATA_PATH.exists():
         db = json.loads(DATA_PATH.read_text(encoding="utf-8"))
     elif SQLITE_PATH.exists():
         db = load_sqlite()
     else:
-        db = empty_db()
+        # ถ้าไม่มี local data ลองโหลดจาก GitHub
+        if GITHUB_STORAGE_AVAILABLE:
+            github_data = load_from_github()
+            if github_data:
+                db = github_data
+                print(f"Loaded {len(db.get('draws', []))} draws from GitHub")
+            else:
+                db = empty_db()
+        else:
+            db = empty_db()
+    
     db.setdefault("schedule_times", list(DEFAULT_SCHEDULE))
     db.setdefault("draws", [])
     db.setdefault("dataset_complete", True)
@@ -77,6 +96,10 @@ def save(db: dict) -> None:
     db["draws"] = sorted(db["draws"], key=lambda d: (d["id"], d["datetime"]))
     DATA_PATH.write_text(json.dumps(db, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     save_sqlite(db)
+    
+    # บันทึกลง GitHub (ถ้ามี token)
+    if GITHUB_STORAGE_AVAILABLE:
+        save_to_github(db)
 
 
 def save_sqlite(db: dict) -> None:

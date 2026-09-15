@@ -4,6 +4,7 @@ venv/
 .tools/
 *.pyc
 .streamlit/secrets.toml
+.streamlit/secrets.toml.example
 .DS_Store
 *.log
 .env
