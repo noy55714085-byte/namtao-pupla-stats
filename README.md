@@ -1,14 +1,38 @@
-# สถิติน้ำเต้าปูปลา (Streamlit)
+# สถิติน้ำเต้าปูปลา (Streamlit Multi-Page Application)
 
-เว็บแอปวิเคราะห์ความน่าจะเป็นจากประวัติลูกเต๋า 3 ลูก น้ำหนักโมเดล: Time-Slot 40% + Markov 30% + Dice Combination 20% + Hot/Cold 10%
+เว็บแอปวิเคราะห์ความน่าจะเป็นจากประวัติลูกเต๋า 3 ลูก พร้อมระบบ Multi-Page Application ที่มี 3 หน้าหลัก
 
-ข้อมูลถูกบันทึกอัตโนมัติที่ `data/history.json` และสำเนา `data/history.sqlite` — ปิดเว็บแล้วเปิดใหม่ข้อมูลไม่หาย
+## ✨ คุณสมบัติพิเศษ (เวอร์ชัน 2.0)
 
-## ✨ คุณสมบัติพิเศษ
-
+- **Multi-Page Application** - 3 หน้าหลักที่ใช้ฐานข้อมูลร่วมกัน
 - **GitHub Storage** - ข้อมูลถูกบันทึกลง GitHub อัตโนมัติ (ป้องกันข้อมูลหายบน Streamlit Cloud)
 - **Hybrid Storage** - ใช้ Local Storage + GitHub Storage ร่วมกัน
 - **Auto Sync** - ทุกครั้งที่บันทึกข้อมูล จะ sync กับ GitHub อัตโนมัติ
+- **Multi-Model Analysis** - วิเคราะห์จาก 5 โมเดลพร้อมระบบ Backtest
+- **Betting Tracker** - ระบบบันทึกการแทงและคำนวณกำไร/ขาดทุน
+
+## 📋 หน้าหลักทั้ง 3 หน้า
+
+### 📊 หน้า 1: Data Management (ศูนย์จัดการประวัติผล)
+- ฟอร์มเพิ่มงวดใหม่, แก้ไขข้อมูลย้อนหลัง, ลบงวด
+- ตารางสรุปประวัติย้อนหลังทั้งหมด
+- ระบบค้นหา/กรองตามช่วงเวลา
+
+### 🧠 หน้า 2: Multi-Model Predictor & Backtest (วิเคราะห์และเปรียบเทียบโมเดล)
+- คำนวณความน่าจะเป็นจาก 5 โมเดล:
+  1. Time-Slot Weighted Model (เน้นช่วงเวลา 40%)
+  2. Markov Chain Model (เน้นการเปลี่ยนผ่านงวดถัดไป)
+  3. Hot/Cold Exponential Decay Model (เน้นงวดล่าสุด)
+  4. Combination & Pair Dice Model (เน้นโอกาสเบิ้ล/ตอง)
+  5. Ensemble Hybrid Model (ค่าเฉลี่ยรวมทุกโมเดล)
+- ตารางเปรียบเทียบ % โอกาสออกของทั้ง 6 สัญลักษณ์
+- ระบบ Backtesting: วัดความแม่นยำย้อนหลังของทั้ง 5 โมเดล
+
+### 💰 หน้า 3: P&L & Betting Tracker (ระบบคำนวณกำไร/ขาดทุน)
+- ฟอร์มบันทึกการแทง: เลขงวด, สัญลักษณ์ที่เลือกแทง, จำนวนเงินทุน
+- ตรวจผลรางวัลให้อัตโนมัติเมื่อมีการเพิ่มผลรางวัล
+- คำนวณอัตราจ่าย (Payout Ratio) ตามผลลูกเต๋า
+- แดชบอร์ดสรุปทางการเงิน: ยอดเงินลงทุนรวม, ยอดเงินรางวัลรวม, กำไร/ขาดทุนสุทธิ, และ % ROI
 
 ## ติดตั้งและรัน
 
@@ -40,10 +64,10 @@ streamlit run app.py
 ### 1. สร้าง GitHub Personal Access Token
 1. เข้า https://github.com/settings/tokens
 2. กด **Generate new token** → **Generate new token (classic)**
-3. ตั้งชื่อ (เช่น `namtao-pupla-stats`)
+3. ตั้งชื่อ: `namtao-pupla-stats`
 4. เลือก scope: `repo` (หรือ `public_repo` ถ้า repository เป็น public)
 5. กด **Generate token**
-6. **คัดลอก token** (จะแสดงครั้งเดียวเท่านั้น)
+6. **คัดลอก token** (จะแสดงครั้งเดียวเท่านั้น!)
 
 ### 2. ตั้งค่าใน Streamlit Community Cloud
 1. เข้า https://share.streamlit.io
@@ -54,45 +78,42 @@ streamlit run app.py
    GITHUB_TOKEN = "your_github_personal_access_token_here"
    ```
 5. กด **Save**
+6. **Redeploy** แอป
 
 ### 3. สำหรับ Local Development
 คัดลอกไฟล์ `.streamlit/secrets.toml.example` เป็น `.streamlit/secrets.toml` และใส่ token ของคุณ:
-
 ```toml
 GITHUB_TOKEN = "your_github_personal_access_token_here"
 ```
 
-## วิธีใช้อย่างย่อ
-
-1. แท็บ **แดชบอร์ด** — ดู % ทั้ง 6 ตัว, Top 3, กราฟ, Confidence และเลือก **รอบเวลา** ที่แถบข้าง
-2. แท็บ **จัดการประวัติ** หรือฟอร์มข้างจอ — เพิ่ม / แก้ไข / ลบงวด แล้วโมเดลคำนวณใหม่ทันที
-3. แท็บ **สถิติและความแม่นยำ** — ความถี่รวม, Hot/Cold, วัดทายย้อนหลังเทียบเส้นสุ่ม (~42% สำหรับตัวเต็งอันดับ 1)
-4. แท็บ **นำเข้า / สำรอง** — ดาวน์โหลด JSON/SQLite หรือวางหลายงวดทีเดียวเมื่ออัปเดตรายเดือน
-
-รูปแบบวางหลายงวด:
+## โครงสร้างโปรเจกต์
 
 ```
-36260204,2026-09-16 12:05,4,6,1
+Luncky/
+├── app.py                          # หน้าหลัก (Landing Page)
+├── analyze.py                      # เอนจินสถิติ + บันทึกคลัง + GitHub Storage
+├── github_storage.py               # จัดการ GitHub API
+├── requirements.txt                # ไลบรารี
+├── pages/
+│   ├── 1_Data_Management.py        # หน้าจัดการข้อมูล
+│   ├── 2_Multi_Model_Predictor.py  # หน้าวิเคราะห์โมเดล
+│   └── 3_P_L_Betting_Tracker.py    # หน้าระบบคำนวณกำไร/ขาดทุน
+├── data/
+│   ├── history.json                # ประวัติหลัก (local)
+│   ├── history.sqlite              # สำเนา SQLite (local)
+│   └── betting.json                # ข้อมูลการแทง (local)
+├── .streamlit/
+│   ├── config.toml                 # การตั้งค่า Streamlit
+│   └── secrets.toml                # Secrets (GitHub Token)
+└── README.md                       # คำอธิบายโปรเจกต์
 ```
-
-เลขสัญลักษณ์: 1 ปู, 2 ปลา, 3 น้ำเต้า, 4 เสือ, 5 ไก่, 6 กุ้ง
-
-ส่งรูปรายเดือนมาเพิ่มในคลังได้ — ยิ่งงวดมาก backtest จะบอกได้ชัดขึ้นว่าโมเดลดีกว่าสุ่มหรือไม่
-
-## ไฟล์หลัก
-
-- `app.py` — UI Streamlit
-- `analyze.py` — เอนจินสถิติ + บันทึกคลัง + GitHub Storage
-- `github_storage.py` — จัดการ GitHub API สำหรับ persistent storage
-- `data/history.json` — ประวัติหลัก (local)
-- `data/history.sqlite` — สำเนา SQLite (local)
-- `requirements.txt` — ไลบรารี
 
 ## ระบบบันทึกข้อมูล
 
 ### Local Storage (ค่าเริ่มต้น)
 - บันทึกลง `data/history.json` (JSON format)
 - บันทึกสำเนาลง `data/history.sqlite` (SQLite format)
+- บันทึกข้อมูลการแทงลง `data/betting.json`
 - ข้อมูลคงอยู่ถาวรบนเครื่อง
 
 ### GitHub Storage (สำหรับ Streamlit Cloud)
@@ -116,6 +137,27 @@ GITHUB_TOKEN = "your_github_personal_access_token_here"
 ## 📝 ข้อควรระวัง
 
 - **Local Development**: ข้อมูลจะถูกบันทึกลงเครื่องเท่านั้น (ไม่ sync กับ GitHub ถ้าไม่มี token)
-- **Streamlit Cloud**: ต้องมี `GITHUB_TOKEN` ถึงจะบันทึกลง GitHub ได้
+- **Streamlit Cloud**: ต้องมี `GITHUB_TOKEN` ใน Streamlit Secrets ถึงจะบันทึกลง GitHub ได้
 - **GitHub API Rate Limit**: ถ้าไม่มี token จะโหลดได้แต่บันทึกไม่ได้
 - **Data Sync**: ข้อมูลจะ sync กับ GitHub ทุกครั้งที่บันทึก/แก้ไข/ลบ
+- **Multi-Page**: ทุกหน้าใช้ฐานข้อมูลร่วมกัน ข้อมูลจะอัปเดตตรงกันอัตโนมัติ
+
+## อัตราจ่าย (Payout Ratio)
+
+- ออก 1 ลูกตรง = ได้ 1 เท่า
+- ออก 2 ลูกตรง = ได้ 2 เท่า
+- ออก 3 ลูกตรง = ได้ 3 เท่า
+- ออกไม่ตรงเลย = เสียทั้งหมด
+
+## 🎯 สรุป
+
+ตอนนี้แอปของคุณมี:
+- ✅ **Multi-Page Application** - 3 หน้าหลักที่ใช้ฐานข้อมูลร่วมกัน
+- ✅ **Hybrid Storage** - Local + GitHub ร่วมกัน
+- ✅ **Auto Sync** - บันทึกลง GitHub อัตโนมัติ
+- ✅ **Persistent Data** - ข้อมูลไม่หายแม้ redeploy
+- ✅ **Multi-Model Analysis** - 5 โมเดลพร้อม Backtest
+- ✅ **Betting Tracker** - ระบบบันทึกการแทงและคำนวณกำไร/ขาดทุน
+- ✅ **Free Solution** - ใช้ GitHub ที่มีอยู่แล้ว ไม่ต้องจ่ายเพิ่ม
+
+**โปรเจกต์พร้อม Deploy และข้อมูลจะไม่หายแล้วครับ!** 🎲✨

@@ -20,6 +20,7 @@ except ImportError:
 DATA_DIR = Path(__file__).resolve().parent / "data"
 DATA_PATH = DATA_DIR / "history.json"
 SQLITE_PATH = DATA_DIR / "history.sqlite"
+BETTING_PATH = DATA_DIR / "betting.json"
 
 SYMBOLS = {1: "ปู", 2: "ปลา", 3: "น้ำเต้า", 4: "เสือ", 5: "ไก่", 6: "กุ้ง"}
 SYMBOL_EMOJI = {1: "🦀", 2: "🐟", 3: "🎃", 4: "🐯", 5: "🐓", 6: "🦐"}
@@ -34,6 +35,7 @@ EMPTY_DB = {
     "dataset_complete": True,
     "notes": [],
     "draws": [],
+    "bets": [],  # เพิ่มข้อมูลการแทง
 }
 
 
@@ -84,6 +86,7 @@ def load() -> dict:
     
     db.setdefault("schedule_times", list(DEFAULT_SCHEDULE))
     db.setdefault("draws", [])
+    db.setdefault("bets", [])  # เพิ่ม bets ใน db
     db.setdefault("dataset_complete", True)
     db["draws"] = sorted(db["draws"], key=lambda d: (d["id"], d["datetime"]))
     if db["draws"] and not SQLITE_PATH.exists():
@@ -163,6 +166,116 @@ def delete_draw(db: dict, draw_id: int) -> dict:
     return db
 
 
+# Betting Management Functions
+def load_betting() -> dict:
+    """โหลดข้อมูลการแทงจากไฟล์ betting.json"""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    if BETTING_PATH.exists():
+        return json.loads(BETTING_PATH.read_text(encoding="utf-8"))
+    return {"bets": []}
+
+
+def save_betting(betting_data: dict) -> None:
+    """บันทึกข้อมูลการแทงลงไฟล์ betting.json"""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    BETTING_PATH.write_text(json.dumps(betting_data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def add_bet(db: dict, betting_data: dict, draw_id: int, symbols: list[int], amount: float, currency: str = "LAK") -> dict:
+    """เพิ่มข้อมูลการแทง"""
+    # ตรวจสอบว่างวดมีอยู่จริงหรือไม่
+    draw = next((d for d in db["draws"] if d["id"] == draw_id), None)
+    if not draw:
+        raise ValueError(f"ไม่พบงวด {draw_id} ในคลังข้อมูล")
+    
+    bet = {
+        "id": len(betting_data["bets"]) + 1,
+        "draw_id": draw_id,
+        "draw_datetime": draw["datetime"],
+        "symbols": symbols,  # list of symbol IDs (1-6)
+        "amount": amount,
+        "currency": currency,
+        "status": "pending",  # pending, won, lost
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "result": None,
+        "payout": 0.0,
+        "profit": 0.0
+    }
+    
+    betting_data["bets"].append(bet)
+    save_betting(betting_data)
+    return betting_data
+
+
+def calculate_bet_result(bet: dict, draw: dict) -> dict:
+    """คำนวณผลการแทงจากผลรางวัลจริง"""
+    draw_symbols = set(draw["dice"])
+    bet_symbols = set(bet["symbols"])
+    
+    # นับจำนวนสัญลักษณ์ที่ออกตรงกับที่แทง
+    matches = len(bet_symbols & draw_symbols)
+    
+    # คำนวณอัตราจ่าย
+    payout_rate = matches  # ออก 1 ลูกได้ 1 เท่า, 2 ลูกได้ 2 เท่า, 3 ลูกได้ 3 เท่า
+    payout = bet["amount"] * payout_rate
+    profit = payout - bet["amount"]
+    
+    return {
+        "status": "won" if matches > 0 else "lost",
+        "result": matches,
+        "payout": payout,
+        "profit": profit
+    }
+
+
+def update_bet_results(db: dict, betting_data: dict) -> dict:
+    """อัปเดตผลการแทงทั้งหมดเมื่อมีผลรางวัลใหม่"""
+    for bet in betting_data["bets"]:
+        if bet["status"] == "pending":
+            draw = next((d for d in db["draws"] if d["id"] == bet["draw_id"]), None)
+            if draw:
+                result = calculate_bet_result(bet, draw)
+                bet["status"] = result["status"]
+                bet["result"] = result["result"]
+                bet["payout"] = result["payout"]
+                bet["profit"] = result["profit"]
+    
+    save_betting(betting_data)
+    return betting_data
+
+
+def calculate_pnl(betting_data: dict) -> dict:
+    """คำนวณสรุปผลการเงิน"""
+    bets = betting_data["bets"]
+    
+    total_invested = sum(b["amount"] for b in bets)
+    total_payout = sum(b["payout"] for b in bets)
+    net_pnl = total_payout - total_invested
+    
+    # คำนวณ ROI
+    roi = (net_pnl / total_invested * 100) if total_invested > 0 else 0
+    
+    # แยกตามสถานะ
+    total_bets = len(bets)
+    won_bets = len([b for b in bets if b["status"] == "won"])
+    lost_bets = len([b for b in bets if b["status"] == "lost"])
+    pending_bets = len([b for b in bets if b["status"] == "pending"])
+    
+    win_rate = (won_bets / total_bets * 100) if total_bets > 0 else 0
+    
+    return {
+        "total_invested": total_invested,
+        "total_payout": total_payout,
+        "net_pnl": net_pnl,
+        "roi": roi,
+        "total_bets": total_bets,
+        "won_bets": won_bets,
+        "lost_bets": lost_bets,
+        "pending_bets": pending_bets,
+        "win_rate": win_rate
+    }
+
+
 def expected_schedule(start: datetime, end: datetime, times: list[str]) -> list[datetime]:
     slots = []
     day = start.date()
@@ -224,6 +337,174 @@ def normalize(scores: dict[int, float]) -> dict[int, float]:
     if total <= 0:
         return {i: 100 / 6 for i in range(1, 7)}
     return {i: 100.0 * max(scores[i], 0.0) / total for i in range(1, 7)}
+
+
+# Multi-Model Functions
+def timeslot_model_only(draws: list[dict], next_time: str) -> dict[int, float]:
+    """Model 1: Time-Slot Weighted Model (เน้นช่วงเวลา 100%)"""
+    same = [d["dice"] for d in draws if d["datetime"].endswith(next_time)]
+    return face_share(same)
+
+
+def markov_model_only(draws: list[dict]) -> dict[int, float]:
+    """Model 2: Markov Chain Model (เน้นการเปลี่ยนผ่านงวดถัดไป 100%)"""
+    trans = defaultdict(Counter)
+    for a, b in zip(draws, draws[1:]):
+        nxt = Counter(b["dice"])
+        for face in a["dice"]:
+            trans[face].update(nxt)
+    last = draws[-1]["dice"]
+    scores = {i: 0.0 for i in range(1, 7)}
+    used = 0
+    for face in last:
+        cnt = trans[face]
+        tot = sum(cnt.values())
+        if tot == 0:
+            continue
+        used += 1
+        for i in range(1, 7):
+            scores[i] += cnt[i] / tot
+    if used == 0:
+        return {i: 1 / 6 for i in range(1, 7)}
+    return {i: scores[i] / used for i in range(1, 7)}
+
+
+def hotcold_exponential_model(draws: list[dict]) -> dict[int, float]:
+    """Model 3: Hot/Cold Exponential Decay Model (เน้นงวดล่าสุด 100%)"""
+    weights = []
+    for i in range(len(draws)):
+        # Exponential decay: 0.9^i (งวดล่าสุดมีน้ำหนักสูงสุด)
+        weights.append(0.9 ** i)
+    weights.reverse()  # งวดล่าสุดมีน้ำหนัก 1.0
+    
+    face_counts = Counter()
+    total_weight = 0
+    for draw, weight in zip(draws, weights):
+        for face in draw["dice"]:
+            face_counts[face] += weight
+        total_weight += weight * 3
+    
+    if total_weight == 0:
+        return {i: 1 / 6 for i in range(1, 7)}
+    
+    return {i: face_counts[i] / total_weight for i in range(1, 7)}
+
+
+def combo_model_only(draws: list[dict]) -> dict[int, float]:
+    """Model 4: Combination & Pair Dice Model (เน้นโอกาสเบิ้ล/ตอง 100%)"""
+    return face_share([d["dice"] for d in draws])
+
+
+def ensemble_model(draws: list[dict], next_time: str) -> dict[int, float]:
+    """Model 5: Ensemble Hybrid Model (ค่าเฉลี่ยรวมทุกโมเดล)"""
+    ts = timeslot_model_only(draws, next_time)
+    mk = markov_model_only(draws)
+    hc = hotcold_exponential_model(draws)
+    cm = combo_model_only(draws)
+    
+    # ค่าเฉลี่ยจากทุกโมเดล
+    ensemble = {i: (ts[i] + mk[i] + hc[i] + cm[i]) / 4 for i in range(1, 7)}
+    return normalize(ensemble)
+
+
+def multi_model_predict(db: dict, timeslot: str | None = None) -> dict:
+    """คำนวณความน่าจะเป็นจากทุกโมเดล"""
+    draws = sorted(db["draws"], key=lambda d: (d["id"], d["datetime"]))
+    if not draws:
+        uniform = {i: 100 / 6 for i in range(1, 7)}
+        return {
+            "next_id": None,
+            "next_time": timeslot or "12:05",
+            "models": {
+                "timeslot": uniform,
+                "markov": uniform,
+                "hotcold": uniform,
+                "combo": uniform,
+                "ensemble": uniform
+            },
+            "comparison": pd.DataFrame()
+        }
+    
+    nxt_id, nxt_label, nxt_time, auto_slot = next_period(db, timeslot)
+    
+    # คำนวณจากทุกโมเดล
+    models = {
+        "timeslot": normalize(timeslot_model_only(draws, nxt_time)),
+        "markov": normalize(markov_model_only(draws)),
+        "hotcold": normalize(hotcold_exponential_model(draws)),
+        "combo": normalize(combo_model_only(draws)),
+        "ensemble": normalize(ensemble_model(draws, nxt_time))
+    }
+    
+    # สร้างตารางเปรียบเทียบ
+    comparison_data = []
+    for i in range(1, 7):
+        row = {
+            "สัญลักษณ์": f"{SYMBOL_EMOJI[i]} {SYMBOLS[i]}",
+            "Time-Slot": f"{models['timeslot'][i]:.1f}%",
+            "Markov": f"{models['markov'][i]:.1f}%",
+            "Hot/Cold": f"{models['hotcold'][i]:.1f}%",
+            "Combo": f"{models['combo'][i]:.1f}%",
+            "Ensemble": f"{models['ensemble'][i]:.1f}%"
+        }
+        comparison_data.append(row)
+    
+    return {
+        "next_id": nxt_id,
+        "next_time": nxt_time,
+        "models": models,
+        "comparison": pd.DataFrame(comparison_data)
+    }
+
+
+def multi_model_backtest(db: dict, min_history: int = 20) -> dict:
+    """Backtest ทุกโมเดลและเปรียบเทียบความแม่นยำ"""
+    draws = sorted(db["draws"], key=lambda d: (d["id"], d["datetime"]))
+    
+    model_results = {
+        "timeslot": {"top1": 0, "top3": 0, "total": 0},
+        "markov": {"top1": 0, "top3": 0, "total": 0},
+        "hotcold": {"top1": 0, "top3": 0, "total": 0},
+        "combo": {"top1": 0, "top3": 0, "total": 0},
+        "ensemble": {"top1": 0, "top3": 0, "total": 0}
+    }
+    
+    for i in range(min_history, len(draws)):
+        subset = {"schedule_times": db.get("schedule_times", DEFAULT_SCHEDULE), "draws": draws[:i], "dataset_complete": True}
+        actual = set(draws[i]["dice"])
+        
+        # คำนวณจากทุกโมเดล
+        pred = multi_model_predict(subset)
+        
+        for model_name, scores in pred["models"].items():
+            ranked = sorted(scores.items(), key=lambda x: -x[1])
+            top1 = ranked[0][0]
+            top3 = set([x[0] for x in ranked[:3]])
+            
+            model_results[model_name]["total"] += 1
+            if top1 in actual:
+                model_results[model_name]["top1"] += 1
+            if top3 & actual:
+                model_results[model_name]["top3"] += 1
+    
+    # คำนวณเปอร์เซ็นต์
+    summary = {}
+    for model_name, results in model_results.items():
+        total = results["total"]
+        if total > 0:
+            summary[model_name] = {
+                "top1_pct": (results["top1"] / total * 100),
+                "top3_pct": (results["top3"] / total * 100),
+                "total_tests": total
+            }
+        else:
+            summary[model_name] = {
+                "top1_pct": 0,
+                "top3_pct": 0,
+                "total_tests": 0
+            }
+    
+    return summary
 
 
 def face_share(dice_lists: list[list[int]]) -> dict[int, float]:
