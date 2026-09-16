@@ -10,6 +10,8 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import pandas as pd
+
 # Import GitHub Storage module
 try:
     from github_storage import load_from_github, save_to_github, github_storage_available

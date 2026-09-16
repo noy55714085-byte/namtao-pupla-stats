@@ -54,8 +54,8 @@ def render_model_prediction(db: dict, slot: str) -> None:
     fig_data = []
     for i in range(1, 7):
         for model_name in model_names:
-            model_key = model_name.lower().replace("/", "").replace(" ", "")
-            if model_key == "hot/cold":
+            model_key = model_name.lower().replace("/", "").replace(" ", "").replace("-", "")
+            if model_key == "hotcold":
                 model_key = "hotcold"
             fig_data.append({
                 "สัญลักษณ์": f"{SYMBOL_EMOJI[i]} {SYMBOLS[i]}",
