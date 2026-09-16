@@ -10,6 +10,9 @@ from analyze import (
     DEFAULT_SCHEDULE,
     SYMBOL_EMOJI,
     SYMBOLS,
+    detailed_backtest_matrix,
+    detailed_model_breakdown,
+    leaderboard_metrics,
     load,
     multi_model_backtest,
     multi_model_predict,
@@ -82,6 +85,79 @@ def render_model_prediction(db: dict, slot: str) -> None:
     st.plotly_chart(fig, width="stretch")
 
 
+def render_detailed_breakdown(db: dict, slot: str) -> None:
+    """แสดงผลการทำนายแบบละเอียดยิบแยกตามโมเดล"""
+    pred = multi_model_predict(db, None if slot == "อัตโนมัติ (งวดถัดไป)" else slot)
+    
+    if pred["next_id"] is None:
+        st.warning("ยังไม่มีประวัติในคลัง — เพิ่มงวดแรกที่หน้า Data Management")
+        return
+    
+    st.subheader("🎯 การทำนายงวดถัดไปแบบละเอียด (Next Draw Detailed Breakdown)")
+    
+    model_descriptions = {
+        "Time-Slot": "เน้นช่วงเวลา 40%",
+        "Markov": "เน้นการเปลี่ยนผ่านงวด 30%",
+        "Hot/Cold": "เน้นแนวโน้มล่าสุด 10%",
+        "Combo": "เน้นลูกเต๋าคู่/เบิ้ล/ตอง 20%",
+        "Ensemble": "โมเดลรวมพลัง (ค่าเฉลี่ย)"
+    }
+    
+    # ใช้ Tabs แยกตามโมเดล
+    tabs = st.tabs([
+        "⏰ Time-Slot Model",
+        "🔗 Markov Chain Model", 
+        "🔥 Hot/Cold Exponential",
+        "🎲 Combination & Pair",
+        "🌟 Ensemble Hybrid"
+    ])
+    
+    model_names = ["Time-Slot", "Markov", "Hot/Cold", "Combo", "Ensemble"]
+    
+    for tab, model_name in zip(tabs, model_names):
+        with tab:
+            breakdown = detailed_model_breakdown(pred["models"], model_name, pred["next_time"])
+            
+            st.markdown(f"### {model_name} Model")
+            st.caption(model_descriptions[model_name])
+            
+            # แสดง Top 1, Top 2, Top 3
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric(
+                    f"🥇 Top 1: {breakdown['top1']['emoji']} {breakdown['top1']['name']}",
+                    f"{breakdown['top1']['percentage']:.1f}%",
+                    help=breakdown['top1']['reason']
+                )
+                st.caption(breakdown['top1']['reason'])
+            
+            with col2:
+                st.metric(
+                    f"🥈 Top 2: {breakdown['top2']['emoji']} {breakdown['top2']['name']}",
+                    f"{breakdown['top2']['percentage']:.1f}%",
+                    help=breakdown['top2']['reason']
+                )
+                st.caption(breakdown['top2']['reason'])
+            
+            with col3:
+                st.metric(
+                    f"🥉 Top 3: {breakdown['top3']['emoji']} {breakdown['top3']['name']}",
+                    f"{breakdown['top3']['percentage']:.1f}%",
+                    help=breakdown['top3']['reason']
+                )
+                st.caption(breakdown['top3']['reason'])
+            
+            # แสดง Confidence Level
+            confidence_color = {"ต่ำ": "#C45C26", "ปานกลาง": "#C49A26", "สูง": "#1B7A4B"}[breakdown['confidence']]
+            st.markdown(
+                f"<div style='background:white;border:1px solid #d5e4da;border-radius:16px;padding:18px;'>"
+                f"<div style='font-size:1.5rem;font-weight:700;color:{confidence_color}'>{breakdown['confidence']}</div>"
+                f"<div class='hint'>ระดับความมั่นใจของโมเดลนี้</div></div>",
+                unsafe_allow_html=True,
+            )
+
+
 def render_backtest_results(db: dict) -> None:
     """แสดงผลการ Backtest"""
     st.subheader("🎯 วัดความแม่นยำย้อนหลัง (Backtest)")
@@ -92,9 +168,15 @@ def render_backtest_results(db: dict) -> None:
         st.warning(f"ข้อมูลยังไม่พอสำหรับ backtest (ต้องมีอย่างน้อย {min_h + 5} งวด)")
         return
     
+    # แสดงตารางย้อนหลังแบบละเอียด
+    render_detailed_backtest_matrix(db, min_h)
+    
+    # แสดง Leaderboard
+    render_leaderboard(db, min_h)
+    
+    # สรุปผลเดิม
     backtest_results = multi_model_backtest(db, min_history=min_h)
     
-    # สรุปผล
     st.caption("วัดความแม่นยำโดยใช้ประวัติก่อนหน้างวดนั้นคำนวณ แล้วเช็กว่าตัวเต็งอันดับ 1 ออกใน 3 ลูกหรือไม่")
     
     # แสดงตารางสรุป
@@ -142,6 +224,96 @@ def render_backtest_results(db: dict) -> None:
     st.plotly_chart(fig, width="stretch")
 
 
+def render_detailed_backtest_matrix(db: dict, min_history: int) -> None:
+    """แสดงตารางตรวจผลย้อนหลังรายงวดแบบละเอียด"""
+    st.subheader("📊 ตารางตรวจผลย้อนหลังรายงวดแบบละเอียด (Detailed Historical Hit Matrix)")
+    
+    matrix = detailed_backtest_matrix(db, min_history)
+    rows = matrix["rows"]
+    model_names = matrix["model_names"]
+    
+    if not rows:
+        st.warning("ยังไม่มีข้อมูลเพียงพอสำหรับตารางย้อนหลัง")
+        return
+    
+    # สร้าง DataFrame สำหรับแสดง
+    display_data = []
+    for row in rows:
+        display_row = {
+            "งวด": row["งวด"],
+            "รอบเวลา": row["รอบเวลา"],
+            "ผลรางวัลจริง": row["ผลรางวัลจริง_emoji"],
+            "แชมป์ประจำงวด": row["แชมป์ประจำงวด"]
+        }
+        
+        # เพิ่มข้อมูลจากแต่ละโมเดล
+        for model_name in model_names:
+            display_row[f"{model_name.title()}_Top1"] = f"{row[f'{model_name}_top1']} ({row[f'{model_name}_top1_status']})"
+            display_row[f"{model_name.title()}_Top2"] = f"{row[f'{model_name}_top2']} ({row[f'{model_name}_top2_status']})"
+            display_row[f"{model_name.title()}_Top3"] = f"{row[f'{model_name}_top3']} ({row[f'{model_name}_top3_status']})"
+        
+        display_data.append(display_row)
+    
+    df = pd.DataFrame(display_data)
+    
+    # ใช้ st.dataframe แบบ interactive
+    st.dataframe(
+        df,
+        width="stretch",
+        hide_index=True,
+        height=400,
+        use_container_width=True,
+        column_config={
+            "งวด": st.column_config.NumberColumn("งวด", width="small"),
+            "รอบเวลา": st.column_config.TextColumn("รอบเวลา", width="small"),
+            "ผลรางวัลจริง": st.column_config.TextColumn("ผลรางวัลจริง", width="medium"),
+            "แชมป์ประจำงวด": st.column_config.TextColumn("แชมป์ประจำงวด", width="medium")
+        }
+    )
+
+
+def render_leaderboard(db: dict, min_history: int) -> None:
+    """แสดงสรุปเหรียญรางวัลความแม่นยำ (Leaderboard Metrics)"""
+    st.subheader("🏆 สรุปเหรียญรางวัลความแม่นยำ (Leaderboard Metrics)")
+    
+    leaderboard = leaderboard_metrics(db, min_history)
+    
+    # สร้าง DataFrame สำหรับ Leaderboard
+    leaderboard_data = []
+    for model_name, metrics in leaderboard.items():
+        leaderboard_data.append({
+            "โมเดล": model_name.title(),
+            "อัตราเข้าเป้า Top 1 ตรงๆ (%)": f"{metrics['top1_exact_hit_rate']:.1f}%",
+            "อัตราเข้าเป้าอย่างน้อย 1 ตัวใน Top 3 (%)": f"{metrics['top3_any_hit_rate']:.1f}%",
+            "อัตราเข้าเป้าพร้อมกัน 2 ตัวขึ้นใน Top 3 (%)": f"{metrics['top3_double_hit_rate']:.1f}%",
+            "จำนวนงวดที่วัด": metrics['total_tests']
+        })
+    
+    leaderboard_df = pd.DataFrame(leaderboard_data)
+    
+    # จัดเรียงตามอัตราเข้าเป้า Top 1
+    leaderboard_df = leaderboard_df.sort_values(by="อัตราเข้าเป้า Top 1 ตรงๆ (%)", ascending=False)
+    
+    st.dataframe(
+        leaderboard_df,
+        width="stretch",
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "โมเดล": st.column_config.TextColumn("โมเดล", width="medium"),
+            "อัตราเข้าเป้า Top 1 ตรงๆ (%)": st.column_config.NumberColumn("Top 1 ตรงๆ (%)", format="%.1f%%"),
+            "อัตราเข้าเป้าอย่างน้อย 1 ตัวใน Top 3 (%)": st.column_config.NumberColumn("Top 3 อย่างน้อย 1 (%)", format="%.1f%%"),
+            "อัตราเข้าเป้าพร้อมกัน 2 ตัวขึ้นใน Top 3 (%)": st.column_config.NumberColumn("Top 3 พร้อมกัน 2 ตัว (%)", format="%.1f%%"),
+            "จำนวนงวดที่วัด": st.column_config.NumberColumn("จำนวนงวดที่วัด", width="small")
+        }
+    )
+    
+    # แสดงชนะเลิศ
+    if not leaderboard_df.empty:
+        champion = leaderboard_df.iloc[0]
+        st.success(f"🥇 แชมป์ปัจจุบัน: **{champion['โมเดล']}** ด้วยอัตราเข้าเป้า Top 1 ตรงๆ {champion['อัตราเข้าเป้า Top 1 ตรงๆ (%)']}")
+
+
 def render_predictor_page(db: dict) -> None:
     st.title("🧠 Multi-Model Predictor & Backtest")
     
@@ -151,6 +323,11 @@ def render_predictor_page(db: dict) -> None:
     
     # แสดงผลการทำนาย
     render_model_prediction(db, slot)
+    
+    st.divider()
+    
+    # แสดงผลการทำนายแบบละเอียด
+    render_detailed_breakdown(db, slot)
     
     st.divider()
     

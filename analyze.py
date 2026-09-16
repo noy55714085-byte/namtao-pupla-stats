@@ -509,6 +509,133 @@ def multi_model_backtest(db: dict, min_history: int = 20) -> dict:
     return summary
 
 
+def detailed_model_breakdown(models: dict, model_name: str, next_time: str) -> dict:
+    """สร้างรายละเอียดการทำนายของแต่ละโมเดล"""
+    model_key = model_name.lower().replace("/", "").replace(" ", "").replace("-", "")
+    if model_key == "hotcold":
+        model_key = "hotcold"
+    
+    scores = models[model_key]
+    ranked = sorted(scores.items(), key=lambda x: -x[1])
+    
+    return {
+        "model_name": model_name,
+        "top1": {
+            "symbol": ranked[0][0],
+            "emoji": SYMBOL_EMOJI[ranked[0][0]],
+            "name": SYMBOLS[ranked[0][0]],
+            "percentage": ranked[0][1],
+            "reason": f"คะแนนรวม {ranked[0][1]:.1f}%"
+        },
+        "top2": {
+            "symbol": ranked[1][0],
+            "emoji": SYMBOL_EMOJI[ranked[1][0]],
+            "name": SYMBOLS[ranked[1][0]],
+            "percentage": ranked[1][1],
+            "reason": f"คะแนนรวม {ranked[1][1]:.1f}%"
+        },
+        "top3": {
+            "symbol": ranked[2][0],
+            "emoji": SYMBOL_EMOJI[ranked[2][0]],
+            "name": SYMBOLS[ranked[2][0]],
+            "percentage": ranked[2][1],
+            "reason": f"คะแนนรวม {ranked[2][1]:.1f}%"
+        },
+        "confidence": "สูง" if ranked[0][1] > 20 else "ปานกลาง" if ranked[0][1] > 17 else "ต่ำ"
+    }
+
+
+def detailed_backtest_matrix(db: dict, min_history: int = 20) -> dict:
+    """สร้างตารางย้อนหลังแบบละเอียดรายงวด"""
+    draws = sorted(db["draws"], key=lambda d: (d["id"], d["datetime"]))
+    
+    matrix_rows = []
+    model_names = ["timeslot", "markov", "hotcold", "combo", "ensemble"]
+    
+    for i in range(min_history, len(draws)):
+        actual_draw = draws[i]
+        actual_symbols = set(actual_draw["dice"])
+        
+        # คำนวณการทำนายจากทุกโมเดล
+        subset = {"schedule_times": db.get("schedule_times", DEFAULT_SCHEDULE), "draws": draws[:i], "dataset_complete": True}
+        pred = multi_model_predict(subset)
+        
+        row = {
+            "งวด": actual_draw["id"],
+            "รอบเวลา": actual_draw["datetime"][-5:],
+            "ผลรางวัลจริง": label_dice(actual_draw["dice"]),
+            "ผลรางวัลจริง_emoji": " ".join([SYMBOL_EMOJI[x] for x in actual_draw["dice"]])
+        }
+        
+        best_model_score = 0
+        best_model_name = ""
+        
+        for model_name in model_names:
+            scores = pred["models"][model_name]
+            ranked = sorted(scores.items(), key=lambda x: -x[1])
+            top3 = [x[0] for x in ranked[:3]]
+            
+            # ตรวจสอบการเข้าเป้า
+            top1_symbol = ranked[0][0]
+            top1_hit = top1_symbol in actual_symbols
+            top1_matches = len([x for x in top3 if x in actual_symbols])
+            
+            row[f"{model_name}_top1"] = f"{SYMBOL_EMOJI[top1_symbol]} {SYMBOLS[top1_symbol]}"
+            row[f"{model_name}_top1_status"] = "✅ เข้า" if top1_hit else "❌ ไม่เข้า"
+            row[f"{model_name}_top1_matches"] = top1_matches
+            
+            row[f"{model_name}_top2"] = f"{SYMBOL_EMOJI[ranked[1][0]]} {SYMBOLS[ranked[1][0]]}"
+            row[f"{model_name}_top2_status"] = "✅ เข้า" if ranked[1][0] in actual_symbols else "❌ ไม่เข้า"
+            
+            row[f"{model_name}_top3"] = f"{SYMBOL_EMOJI[ranked[2][0]]} {SYMBOLS[ranked[2][0]]}"
+            row[f"{model_name}_top3_status"] = "✅ เข้า" if ranked[2][0] in actual_symbols else "❌ ไม่เข้า"
+            
+            # คำนวณคะแนนสำหรับการเลือกแชมป์
+            model_score = top1_matches * 2 + len([x for x in top3 if x in actual_symbols])
+            if model_score > best_model_score:
+                best_model_score = model_score
+                best_model_name = model_name
+        
+        row["แชมป์ประจำงวด"] = best_model_name.title()
+        
+        matrix_rows.append(row)
+    
+    return {"rows": matrix_rows, "model_names": model_names}
+
+
+def leaderboard_metrics(db: dict, min_history: int = 20) -> dict:
+    """คำนวณสถิติตลอดกาลของ Top 1, Top 2, Top 3"""
+    matrix = detailed_backtest_matrix(db, min_history)
+    rows = matrix["rows"]
+    model_names = matrix["model_names"]
+    
+    leaderboard = {}
+    
+    for model_name in model_names:
+        total = len(rows)
+        if total == 0:
+            leaderboard[model_name] = {
+                "top1_exact_hit_rate": 0,
+                "top3_any_hit_rate": 0,
+                "top3_double_hit_rate": 0,
+                "total_tests": 0
+            }
+            continue
+        
+        top1_exact_hits = sum(1 for row in rows if row[f"{model_name}_top1_status"] == "✅ เข้า")
+        top3_any_hits = sum(1 for row in rows if row[f"{model_name}_top1_matches"] > 0)
+        top3_double_hits = sum(1 for row in rows if row[f"{model_name}_top1_matches"] >= 2)
+        
+        leaderboard[model_name] = {
+            "top1_exact_hit_rate": (top1_exact_hits / total * 100),
+            "top3_any_hit_rate": (top3_any_hits / total * 100),
+            "top3_double_hit_rate": (top3_double_hits / total * 100),
+            "total_tests": total
+        }
+    
+    return leaderboard
+
+
 def face_share(dice_lists: list[list[int]]) -> dict[int, float]:
     c = Counter()
     n = 0
