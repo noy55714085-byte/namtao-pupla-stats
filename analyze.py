@@ -170,11 +170,29 @@ def delete_draw(db: dict, draw_id: int) -> dict:
 
 # Betting Management Functions
 def load_betting() -> dict:
-    """โหลดข้อมูลการแทงจากไฟล์ betting.json"""
+    """โหลดและย้ายข้อมูลการแทงแบบเดิมไปเป็นระบบบิล (ticket) เมื่อจำเป็น."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     if BETTING_PATH.exists():
-        return json.loads(BETTING_PATH.read_text(encoding="utf-8"))
-    return {"bets": []}
+        betting_data = json.loads(BETTING_PATH.read_text(encoding="utf-8"))
+        if "tickets" not in betting_data:
+            # รองรับข้อมูลรุ่นเดิม: หนึ่งรายการเดิมกลายเป็นหนึ่งบิลที่มีหนึ่งชุด
+            tickets = []
+            for bet in betting_data.get("bets", []):
+                tickets.append({
+                    "id": bet.get("id", len(tickets) + 1),
+                    "draw_id": bet["draw_id"],
+                    "draw_datetime": bet.get("draw_datetime", ""),
+                    "currency": bet.get("currency", "LAK"),
+                    "created_at": bet.get("created_at", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+                    "rows": [{"type": "single" if len(bet.get("symbols", [])) == 1 else "pair",
+                              "symbols": bet.get("symbols", []), "amount": float(bet.get("amount", 0))}],
+                    "status": bet.get("status", "pending"), "result": bet.get("result"),
+                    "payout": float(bet.get("payout", 0)), "profit": float(bet.get("profit", 0)),
+                })
+            betting_data = {"tickets": tickets}
+        betting_data.setdefault("tickets", [])
+        return betting_data
+    return {"tickets": []}
 
 
 def save_betting(betting_data: dict) -> None:
@@ -183,74 +201,115 @@ def save_betting(betting_data: dict) -> None:
     BETTING_PATH.write_text(json.dumps(betting_data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def add_bet(db: dict, betting_data: dict, draw_id: int, symbols: list[int], amount: float, currency: str = "LAK") -> dict:
-    """เพิ่มข้อมูลการแทง"""
-    # ตรวจสอบว่างวดมีอยู่จริงหรือไม่
+def add_ticket(db: dict, betting_data: dict, draw_id: int, rows: list[dict], currency: str = "LAK", persist: bool = True) -> dict:
+    """เพิ่มบิลที่ประกอบด้วยชุดแทงเดี่ยวหรือแทงคู่หลายชุด."""
     draw = next((d for d in db["draws"] if d["id"] == draw_id), None)
     if not draw:
         raise ValueError(f"ไม่พบงวด {draw_id} ในคลังข้อมูล")
-    
-    bet = {
-        "id": len(betting_data["bets"]) + 1,
+    if not rows:
+        raise ValueError("บิลต้องมีอย่างน้อย 1 ชุด")
+    cleaned_rows = []
+    for row in rows:
+        symbols = list(row.get("symbols", []))
+        bet_type = row.get("type")
+        amount = float(row.get("amount", 0))
+        required = 1 if bet_type == "single" else 2
+        if bet_type not in ("single", "pair") or len(symbols) != required or len(set(symbols)) != required:
+            raise ValueError("แต่ละชุดต้องเป็นแทงเดี่ยว 1 สัญลักษณ์ หรือแทงคู่ 2 สัญลักษณ์ที่ไม่ซ้ำกัน")
+        if any(symbol not in SYMBOLS for symbol in symbols) or amount <= 0:
+            raise ValueError("กรุณาระบุสัญลักษณ์และจำนวนเงินที่มากกว่า 0 ให้ครบทุกชุด")
+        cleaned_rows.append({"type": bet_type, "symbols": symbols, "amount": amount})
+
+    ticket = {
+        "id": max((ticket.get("id", 0) for ticket in betting_data["tickets"]), default=0) + 1,
         "draw_id": draw_id,
         "draw_datetime": draw["datetime"],
-        "symbols": symbols,  # list of symbol IDs (1-6)
-        "amount": amount,
         "currency": currency,
-        "status": "pending",  # pending, won, lost
+        "rows": cleaned_rows,
+        "total_amount": sum(row["amount"] for row in cleaned_rows),
+        "status": "pending",
         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "result": None,
         "payout": 0.0,
         "profit": 0.0
     }
-    
-    betting_data["bets"].append(bet)
+    betting_data["tickets"].append(ticket)
+    if persist:
+        save_betting(betting_data)
+    return betting_data
+
+
+def calculate_ticket_result(ticket: dict, draw: dict) -> dict:
+    """ใช้กติกา CL Racing: เดี่ยวจ่าย 3/6/9, คู่จ่าย 6 เมื่อออกครบทั้งคู่."""
+    counts = Counter(draw["dice"])
+    row_results = []
+    for row in ticket["rows"]:
+        symbols, amount = row["symbols"], float(row["amount"])
+        if row["type"] == "single":
+            occurrences = counts[symbols[0]]
+            multiplier = occurrences * 3  # 1, 2, 3 ลูก = x3, x6, x9
+            detail = f"ออก {occurrences} ลูก" if occurrences else "ไม่ออก"
+        else:
+            complete_pair = all(counts[symbol] > 0 for symbol in symbols)
+            multiplier = 6 if complete_pair else 0
+            detail = "ออกครบทั้งคู่" if complete_pair else "ออกไม่ครบคู่"
+        row_results.append({"multiplier": multiplier, "payout": amount * multiplier, "detail": detail})
+    payout = sum(item["payout"] for item in row_results)
+    total_amount = sum(float(row["amount"]) for row in ticket["rows"])
+    return {"status": "won" if payout > 0 else "lost", "result": row_results,
+            "payout": payout, "profit": payout - total_amount, "total_amount": total_amount}
+
+
+def update_bet_results(db: dict, betting_data: dict) -> dict:
+    """คำนวณบิลใหม่ทุกครั้ง เพื่อสะท้อนการแก้ไขผลรางวัลใน Data Management."""
+    changed = False
+    for ticket in betting_data.get("tickets", []):
+        draw = next((d for d in db["draws"] if d["id"] == ticket["draw_id"]), None)
+        if draw:
+            result = calculate_ticket_result(ticket, draw)
+            for key, value in result.items():
+                if ticket.get(key) != value:
+                    ticket[key] = value
+                    changed = True
+            if ticket.get("draw_datetime") != draw["datetime"]:
+                ticket["draw_datetime"] = draw["datetime"]
+                changed = True
+    if changed:
+        save_betting(betting_data)
+    return betting_data
+
+
+def update_ticket(db: dict, betting_data: dict, ticket_id: int, draw_id: int, rows: list[dict], currency: str = "LAK") -> dict:
+    """แก้ไขบิล โดยใช้การตรวจสอบเดียวกับการสร้างบิล."""
+    ticket = next((item for item in betting_data.get("tickets", []) if item["id"] == ticket_id), None)
+    if not ticket:
+        raise ValueError("ไม่พบบิลที่ต้องการแก้ไข")
+    staged = {"tickets": []}
+    add_ticket(db, staged, draw_id, rows, currency, persist=False)
+    replacement = staged["tickets"][0]
+    replacement["id"] = ticket_id
+    replacement["created_at"] = ticket.get("created_at", replacement["created_at"])
+    betting_data["tickets"][betting_data["tickets"].index(ticket)] = replacement
+    update_bet_results(db, betting_data)
     save_betting(betting_data)
     return betting_data
 
 
-def calculate_bet_result(bet: dict, draw: dict) -> dict:
-    """คำนวณผลการแทงจากผลรางวัลจริง"""
-    draw_symbols = set(draw["dice"])
-    bet_symbols = set(bet["symbols"])
-    
-    # นับจำนวนสัญลักษณ์ที่ออกตรงกับที่แทง
-    matches = len(bet_symbols & draw_symbols)
-    
-    # คำนวณอัตราจ่าย
-    payout_rate = matches  # ออก 1 ลูกได้ 1 เท่า, 2 ลูกได้ 2 เท่า, 3 ลูกได้ 3 เท่า
-    payout = bet["amount"] * payout_rate
-    profit = payout - bet["amount"]
-    
-    return {
-        "status": "won" if matches > 0 else "lost",
-        "result": matches,
-        "payout": payout,
-        "profit": profit
-    }
-
-
-def update_bet_results(db: dict, betting_data: dict) -> dict:
-    """อัปเดตผลการแทงทั้งหมดเมื่อมีผลรางวัลใหม่"""
-    for bet in betting_data["bets"]:
-        if bet["status"] == "pending":
-            draw = next((d for d in db["draws"] if d["id"] == bet["draw_id"]), None)
-            if draw:
-                result = calculate_bet_result(bet, draw)
-                bet["status"] = result["status"]
-                bet["result"] = result["result"]
-                bet["payout"] = result["payout"]
-                bet["profit"] = result["profit"]
-    
+def delete_ticket(betting_data: dict, ticket_id: int) -> dict:
+    """ลบบิลที่ระบุออกจากประวัติ."""
+    before = len(betting_data.get("tickets", []))
+    betting_data["tickets"] = [ticket for ticket in betting_data.get("tickets", []) if ticket["id"] != ticket_id]
+    if len(betting_data["tickets"]) == before:
+        raise ValueError("ไม่พบบิลที่ต้องการลบ")
     save_betting(betting_data)
     return betting_data
 
 
 def calculate_pnl(betting_data: dict) -> dict:
     """คำนวณสรุปผลการเงิน"""
-    bets = betting_data["bets"]
+    bets = betting_data.get("tickets", [])
     
-    total_invested = sum(b["amount"] for b in bets)
+    total_invested = sum(b.get("total_amount", sum(row["amount"] for row in b["rows"])) for b in bets)
     total_payout = sum(b["payout"] for b in bets)
     net_pnl = total_payout - total_invested
     

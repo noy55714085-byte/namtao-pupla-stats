@@ -20,6 +20,8 @@ from analyze import (
     predict,
     reasons,
     save,
+    load_betting,
+    update_bet_results,
     upsert_draw,
 )
 
@@ -101,6 +103,8 @@ def render_management_page(db: dict) -> None:
         dt_str = f"{day.strftime('%Y-%m-%d')} {slot}"
         dice = [NAME_TO_ID[s1], NAME_TO_ID[s2], NAME_TO_ID[s3]]
         upsert_draw(db, int(draw_id), dt_str, dice)
+        # ผลบิลที่ผูกกับงวดนี้จะคำนวณใหม่ทันที รวมถึงกรณีแก้ไขผลรางวัลเดิม
+        update_bet_results(db, load_betting())
         st.session_state.pop("edit_id", None)
         st.success(f"บันทึกงวด {int(draw_id)} แล้ว · {label_dice(dice)}")
         st.rerun()
