@@ -14,7 +14,7 @@ import pandas as pd
 
 # Import GitHub Storage module
 try:
-    from github_storage import load_from_github, save_to_github, github_storage_available
+    from github_storage import delete_from_github, load_from_github, save_to_github, github_storage_available
     GITHUB_STORAGE_AVAILABLE = github_storage_available()
 except ImportError:
     GITHUB_STORAGE_AVAILABLE = False
@@ -69,23 +69,16 @@ def label_dice(dice: list[int]) -> str:
 
 def load() -> dict:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    
-    # ลองโหลดจาก local ก่อน
-    if DATA_PATH.exists():
+    # บน Streamlit Cloud ต้องใช้สำเนาบน GitHub ก่อน เพราะดิสก์ local ถูกรีบูตได้
+    github_data = load_from_github() if GITHUB_STORAGE_AVAILABLE else None
+    if github_data:
+        db = github_data
+    elif DATA_PATH.exists():
         db = json.loads(DATA_PATH.read_text(encoding="utf-8"))
     elif SQLITE_PATH.exists():
         db = load_sqlite()
     else:
-        # ถ้าไม่มี local data ลองโหลดจาก GitHub
-        if GITHUB_STORAGE_AVAILABLE:
-            github_data = load_from_github()
-            if github_data:
-                db = github_data
-                print(f"Loaded {len(db.get('draws', []))} draws from GitHub")
-            else:
-                db = empty_db()
-        else:
-            db = empty_db()
+        db = empty_db()
     
     db.setdefault("schedule_times", list(DEFAULT_SCHEDULE))
     db.setdefault("draws", [])
@@ -105,7 +98,7 @@ def save(db: dict) -> None:
     
     # บันทึกลง GitHub (ถ้ามี token)
     if GITHUB_STORAGE_AVAILABLE:
-        save_to_github(db)
+        save_to_github(db, message=f"Update history.json - {len(db.get('draws', []))} draws")
 
 
 def save_sqlite(db: dict) -> None:
@@ -173,8 +166,11 @@ def delete_draw(db: dict, draw_id: int) -> dict:
 def load_betting() -> dict:
     """โหลดและย้ายข้อมูลการแทงแบบเดิมไปเป็นระบบบิล (ticket) เมื่อจำเป็น."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    if BETTING_PATH.exists():
+    # เลือกสำเนาบน GitHub ก่อน เพื่อให้ประวัติบิลไม่หายหลัง Cloud reboot
+    betting_data = load_from_github("data/betting.json") if GITHUB_STORAGE_AVAILABLE else None
+    if betting_data is None and BETTING_PATH.exists():
         betting_data = json.loads(BETTING_PATH.read_text(encoding="utf-8"))
+    if betting_data is not None:
         if "tickets" not in betting_data:
             # รองรับข้อมูลรุ่นเดิม: หนึ่งรายการเดิมกลายเป็นหนึ่งบิลที่มีหนึ่งชุด
             tickets = []
@@ -197,13 +193,18 @@ def load_betting() -> dict:
 
 
 def save_betting(betting_data: dict) -> None:
-    """บันทึกข้อมูลการแทงลงไฟล์ betting.json"""
+    """บันทึกบิลทั้งในเครื่องและ GitHub เพื่อคงอยู่หลัง Streamlit reboot."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     BETTING_PATH.write_text(json.dumps(betting_data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    if GITHUB_STORAGE_AVAILABLE:
+        save_to_github(betting_data, "data/betting.json", f"Update betting history - {len(betting_data.get('tickets', []))} tickets")
 
 
 def load_ticket_draft() -> dict | None:
     """โหลดร่างบิลที่เก็บไว้ เพื่อคืนฟอร์มเดิมหลัง Streamlit รีบูต."""
+    github_draft = load_from_github("data/draft_ticket.json") if GITHUB_STORAGE_AVAILABLE else None
+    if github_draft is not None:
+        return github_draft
     if not DRAFT_TICKET_PATH.exists():
         return None
     try:
@@ -214,15 +215,19 @@ def load_ticket_draft() -> dict | None:
 
 
 def save_ticket_draft(draft: dict) -> None:
-    """บันทึกร่างบิลล่าสุดลง JSON โดยไม่กระทบประวัติบิลจริง."""
+    """บันทึกร่างทั้ง local และ GitHub เพื่อคงอยู่แม้ Cloud reboot."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     DRAFT_TICKET_PATH.write_text(json.dumps(draft, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    if GITHUB_STORAGE_AVAILABLE:
+        save_to_github(draft, "data/draft_ticket.json", "Save current ticket draft")
 
 
 def clear_ticket_draft() -> None:
     """ลบร่างบิลหลังบันทึกสำเร็จหรือผู้ใช้ยกเลิก."""
     if DRAFT_TICKET_PATH.exists():
         DRAFT_TICKET_PATH.unlink()
+    if GITHUB_STORAGE_AVAILABLE:
+        delete_from_github("data/draft_ticket.json", "Clear ticket draft")
 
 
 def add_ticket(db: dict, betting_data: dict, draw_id: int, rows: list[dict], currency: str = "LAK", persist: bool = True) -> dict:
