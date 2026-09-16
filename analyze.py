@@ -23,6 +23,7 @@ DATA_DIR = Path(__file__).resolve().parent / "data"
 DATA_PATH = DATA_DIR / "history.json"
 SQLITE_PATH = DATA_DIR / "history.sqlite"
 BETTING_PATH = DATA_DIR / "betting.json"
+DRAFT_TICKET_PATH = DATA_DIR / "draft_ticket.json"
 
 SYMBOLS = {1: "ปู", 2: "ปลา", 3: "น้ำเต้า", 4: "เสือ", 5: "ไก่", 6: "กุ้ง"}
 SYMBOL_EMOJI = {1: "🦀", 2: "🐟", 3: "🎃", 4: "🐯", 5: "🐓", 6: "🦐"}
@@ -199,6 +200,29 @@ def save_betting(betting_data: dict) -> None:
     """บันทึกข้อมูลการแทงลงไฟล์ betting.json"""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     BETTING_PATH.write_text(json.dumps(betting_data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def load_ticket_draft() -> dict | None:
+    """โหลดร่างบิลที่เก็บไว้ เพื่อคืนฟอร์มเดิมหลัง Streamlit รีบูต."""
+    if not DRAFT_TICKET_PATH.exists():
+        return None
+    try:
+        draft = json.loads(DRAFT_TICKET_PATH.read_text(encoding="utf-8"))
+        return draft if isinstance(draft, dict) else None
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def save_ticket_draft(draft: dict) -> None:
+    """บันทึกร่างบิลล่าสุดลง JSON โดยไม่กระทบประวัติบิลจริง."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    DRAFT_TICKET_PATH.write_text(json.dumps(draft, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def clear_ticket_draft() -> None:
+    """ลบร่างบิลหลังบันทึกสำเร็จหรือผู้ใช้ยกเลิก."""
+    if DRAFT_TICKET_PATH.exists():
+        DRAFT_TICKET_PATH.unlink()
 
 
 def add_ticket(db: dict, betting_data: dict, draw_id: int, rows: list[dict], currency: str = "LAK", persist: bool = True) -> dict:

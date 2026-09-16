@@ -7,7 +7,11 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from analyze import SYMBOL_EMOJI, SYMBOLS, add_ticket, calculate_pnl, delete_ticket, load, load_betting, update_bet_results, update_ticket
+from analyze import (
+    SYMBOL_EMOJI, SYMBOLS, add_ticket, calculate_pnl, clear_ticket_draft,
+    delete_ticket, load, load_betting, load_ticket_draft, save_ticket_draft,
+    update_bet_results, update_ticket,
+)
 
 st.set_page_config(page_title="P&L & Betting Tracker", page_icon="💰", layout="wide")
 CHOICES = [f"{SYMBOL_EMOJI[i]} {SYMBOLS[i]}" for i in range(1, 7)]
@@ -21,14 +25,19 @@ def money(value: float, currency: str = "LAK") -> str:
 def reset_ticket_editor() -> None:
     st.session_state.ticket_rows = 1
     st.session_state.edit_ticket_id = None
+    for key in list(st.session_state):
+        if key.startswith(("ticket_type_", "ticket_symbols_", "ticket_amount_")):
+            st.session_state.pop(key, None)
 
 
 def start_edit_ticket(ticket: dict) -> None:
-    st.session_state.edit_ticket_id = ticket["id"]
-    st.session_state.ticket_rows = len(ticket["rows"])
-    st.session_state.ticket_draw_id = ticket["draw_id"]
-    st.session_state.ticket_currency = ticket.get("currency", "LAK")
-    for index, row in enumerate(ticket["rows"]):
+    """เลื่อนการกำหนดค่าไปก่อนสร้าง widget ในรอบถัดไป."""
+    st.session_state.pending_ticket_edit = ticket
+
+
+def set_ticket_rows(rows: list[dict]) -> None:
+    st.session_state.ticket_rows = len(rows)
+    for index, row in enumerate(rows):
         st.session_state[f"ticket_type_{index}"] = "แทงเดี่ยว (1 สัญลักษณ์)" if row["type"] == "single" else "แทงคู่ (2 สัญลักษณ์)"
         st.session_state[f"ticket_amount_{index}"] = float(row["amount"])
         st.session_state[f"ticket_symbols_{index}"] = [CHOICES[symbol - 1] for symbol in row["symbols"]]
@@ -45,20 +54,58 @@ def ticket_rows_from_state() -> list[dict]:
     return rows
 
 
+def load_draft_into_state(draw_options: list[int]) -> None:
+    """เติม session state จาก JSON เพียงครั้งแรกของ session นี้."""
+    if st.session_state.pop("ticket_editor_reset_pending", False):
+        reset_ticket_editor()
+    pending_edit = st.session_state.pop("pending_ticket_edit", None)
+    if pending_edit:
+        st.session_state.edit_ticket_id = pending_edit["id"]
+        st.session_state.ticket_draw_id = pending_edit["draw_id"]
+        st.session_state.ticket_currency = pending_edit.get("currency", "LAK")
+        set_ticket_rows(pending_edit["rows"])
+        st.session_state.ticket_draft_loaded = True
+        return
+    pending_rows = st.session_state.pop("pending_ticket_rows", None)
+    if pending_rows is not None:
+        set_ticket_rows(pending_rows)
+        st.session_state.ticket_draft_loaded = True
+        return
+    if st.session_state.get("ticket_draft_loaded"):
+        return
+    draft = load_ticket_draft() or {}
+    rows = draft.get("rows") or [{"type": "single", "symbols": [], "amount": 10000.0}]
+    st.session_state.edit_ticket_id = draft.get("edit_ticket_id")
+    st.session_state.ticket_draw_id = draft.get("draw_id") if draft.get("draw_id") in draw_options else draw_options[0]
+    st.session_state.ticket_currency = draft.get("currency", "LAK")
+    set_ticket_rows(rows)
+    st.session_state.ticket_draft_loaded = True
+
+
+def persist_ticket_draft(rows: list[dict] | None = None) -> None:
+    """เก็บทุกค่าปัจจุบันของฟอร์ม เพื่อให้กลับมาแก้ต่อหลัง reboot ได้."""
+    save_ticket_draft({
+        "draw_id": st.session_state.get("ticket_draw_id"),
+        "currency": st.session_state.get("ticket_currency", "LAK"),
+        "rows": ticket_rows_from_state() if rows is None else rows,
+        "edit_ticket_id": st.session_state.get("edit_ticket_id"),
+    })
+
+
 def render_betting_form(db: dict, betting_data: dict) -> None:
     st.subheader("🧾 สร้างบิลการซื้อ")
     if not db["draws"]:
         st.warning("ยังไม่มีงวดในคลัง — เพิ่มงวดที่หน้า Data Management ก่อน")
         return
     st.caption("1 บิลเพิ่มได้หลายชุด: เดี่ยวจ่าย x3/x6/x9 ตามจำนวนที่ออก และคู่จ่าย x6 เมื่อออกครบทั้งคู่")
-    st.session_state.setdefault("ticket_rows", 1)
+    draw_options = [item["id"] for item in sorted(db["draws"], key=lambda item: item["id"], reverse=True)]
+    load_draft_into_state(draw_options)
     editing = next((item for item in betting_data["tickets"] if item["id"] == st.session_state.get("edit_ticket_id")), None)
     if st.session_state.get("edit_ticket_id") and not editing:
         reset_ticket_editor()
     if editing:
         st.info(f"กำลังแก้ไขบิล #{editing['id']}")
 
-    draw_options = [item["id"] for item in sorted(db["draws"], key=lambda item: item["id"], reverse=True)]
     header1, header2 = st.columns(2)
     header1.selectbox("เลขงวด", draw_options, key="ticket_draw_id")
     header2.selectbox("สกุลเงิน", ["LAK", "THB"], key="ticket_currency")
@@ -72,19 +119,25 @@ def render_betting_form(db: dict, betting_data: dict) -> None:
         middle.multiselect("สัญลักษณ์", CHOICES, max_selections=required, key=f"ticket_symbols_{index}", placeholder=f"เลือกให้ครบ {required} สัญลักษณ์")
         right.number_input("เงิน (LAK)", min_value=0.0, value=10000.0, step=1000.0, key=f"ticket_amount_{index}")
         if remove.button("✕", key=f"remove_ticket_row_{index}", disabled=st.session_state.ticket_rows == 1, help="ลบชุดนี้"):
-            for key in (f"ticket_type_{index}", f"ticket_symbols_{index}", f"ticket_amount_{index}"):
-                st.session_state.pop(key, None)
-            st.session_state.ticket_rows -= 1
+            remaining_rows = [row for row_number, row in enumerate(ticket_rows_from_state()) if row_number != index]
+            st.session_state.pending_ticket_rows = remaining_rows
+            persist_ticket_draft(remaining_rows)
             st.rerun()
     current_rows = ticket_rows_from_state()
     total = sum(float(row["amount"] or 0) for row in current_rows)
     st.metric("ยอดเงินรวมทั้งบิล (Total Ticket Amount)", money(total, st.session_state.ticket_currency))
     a, b, c = st.columns([1, 1, 2])
     if a.button("+ เพิ่มชุดแทง", width="stretch"):
+        new_index = st.session_state.ticket_rows
         st.session_state.ticket_rows += 1
+        st.session_state[f"ticket_type_{new_index}"] = "แทงเดี่ยว (1 สัญลักษณ์)"
+        st.session_state[f"ticket_symbols_{new_index}"] = []
+        st.session_state[f"ticket_amount_{new_index}"] = 10000.0
+        persist_ticket_draft()
         st.rerun()
-    if b.button("ยกเลิกแก้ไข", width="stretch", disabled=not editing):
-        reset_ticket_editor()
+    if b.button("ยกเลิก", width="stretch"):
+        clear_ticket_draft()
+        st.session_state.ticket_editor_reset_pending = True
         st.rerun()
     if c.button("บันทึกการแก้ไขบิล" if editing else "บันทึกบิลการซื้อ", type="primary", width="stretch"):
         try:
@@ -92,11 +145,14 @@ def render_betting_form(db: dict, betting_data: dict) -> None:
                 update_ticket(db, betting_data, editing["id"], st.session_state.ticket_draw_id, current_rows, st.session_state.ticket_currency)
             else:
                 add_ticket(db, betting_data, st.session_state.ticket_draw_id, current_rows, st.session_state.ticket_currency)
-            reset_ticket_editor()
+            clear_ticket_draft()
+            st.session_state.ticket_editor_reset_pending = True
             st.success("บันทึกบิลเรียบร้อย")
             st.rerun()
         except ValueError as error:
             st.error(str(error))
+    # Streamlit reruns afterทุกการเลือก/พิมพ์ จึงเขียนร่างล่าสุดทันทีทุกครั้ง.
+    persist_ticket_draft()
 
 
 def row_summary(ticket: dict) -> str:
@@ -120,7 +176,10 @@ def render_betting_history(betting_data: dict) -> None:
     pick = st.selectbox("เลือกบิลเพื่อแก้ไขหรือลบ", [ticket["id"] for ticket in sorted(tickets, key=lambda item: item["id"], reverse=True)])
     edit_col, delete_col = st.columns(2)
     if edit_col.button("✏️ แก้ไขบิล", width="stretch"):
-        start_edit_ticket(next(ticket for ticket in tickets if ticket["id"] == pick))
+        ticket = next(ticket for ticket in tickets if ticket["id"] == pick)
+        start_edit_ticket(ticket)
+        save_ticket_draft({"draw_id": ticket["draw_id"], "currency": ticket.get("currency", "LAK"),
+                           "rows": ticket["rows"], "edit_ticket_id": ticket["id"]})
         st.rerun()
     if delete_col.button("🗑️ ลบบิล", type="secondary", width="stretch"):
         st.session_state.confirm_delete_ticket = pick
