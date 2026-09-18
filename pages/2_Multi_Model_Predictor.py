@@ -10,6 +10,7 @@ from analyze import (
     DEFAULT_SCHEDULE,
     SYMBOL_EMOJI,
     SYMBOLS,
+    calculate_pair_ranking,
     detailed_backtest_matrix,
     detailed_model_breakdown,
     get_top_pairs,
