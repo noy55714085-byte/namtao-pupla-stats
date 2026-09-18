@@ -9,8 +9,8 @@ import streamlit as st
 
 from analyze import (
     SYMBOL_EMOJI, SYMBOLS, add_ticket, calculate_pnl, clear_ticket_draft,
-    delete_ticket, load, load_betting, load_ticket_draft, save_ticket_draft,
-    update_bet_results, update_ticket,
+    delete_ticket, get_top_pairs, load, load_betting, load_ticket_draft,
+    multi_model_predict, save_ticket_draft, update_bet_results, update_ticket,
 )
 
 st.set_page_config(page_title="P&L & Betting Tracker", page_icon="💰", layout="wide")
@@ -92,12 +92,77 @@ def persist_ticket_draft(rows: list[dict] | None = None) -> None:
     })
 
 
+def render_pair_recommendations(db: dict) -> None:
+    """แสดงคำแนะนำคู่แทงจาก Co-occurrence Matrix"""
+    if len(db["draws"]) < 10:
+        st.caption("ข้อมูลยังไม่เพียงพอสำหรับวิเคราะห์คู่แทง (ต้องมีอย่างน้อย 10 งวด)")
+        return
+    
+    st.markdown("### 🎲 คำแนะนำคู่แทงจาก Co-occurrence Matrix")
+    st.caption("คำนวณสถิติว่าสัญลักษณ์ใดบ้างที่มักจะ 'ออกคู่กันในงวดเดียวกัน' บ่อยที่สุด")
+    
+    # คำนวณคะแนนจาก Ensemble Model
+    pred = multi_model_predict(db)
+    ensemble_prob = pred["models"]["ensemble"]
+    
+    # คำนวณ Top 3 คู่
+    top_pairs = get_top_pairs(db, ensemble_prob, top_n=3)
+    
+    if not top_pairs:
+        st.warning("ไม่สามารถคำนวณคู่แทงได้")
+        return
+    
+    # แสดง Top 3 คู่เด็ด
+    st.markdown("#### 🏆 Top 3 คู่เด็ดประจำงวด")
+    
+    for i, pair_data in enumerate(top_pairs, 1):
+        col1, col2, col3, col4 = st.columns([1, 2, 2, 2])
+        
+        with col1:
+            st.markdown(f"**{i}.**")
+        
+        with col2:
+            st.markdown(f"{pair_data['emoji1']} {pair_data['name1']} + {pair_data['emoji2']} {pair_data['name2']}")
+        
+        with col3:
+            st.metric(
+                "คะแนนรวม",
+                f"{pair_data['combined_score']:.1f}%",
+                help=f"Co-occurrence: {pair_data['co_occurrence_rate']:.1f}% + Individual: {pair_data['individual_avg_prob']:.1f}%"
+            )
+        
+        with col4:
+            # ปุ่มดึงคู่เข้าฟอร์มบิล
+            if st.button(f"ดึงคู่นี้", key=f"import_pair_{i}", use_container_width=True):
+                # เพิ่มชุดแทงคู่ใหม่
+                new_index = st.session_state.ticket_rows
+                st.session_state.ticket_rows += 1
+                st.session_state[f"ticket_type_{new_index}"] = "แทงคู่ (2 สัญลักษณ์)"
+                st.session_state[f"ticket_symbols_{new_index}"] = [
+                    f"{pair_data['emoji1']} {pair_data['name1']}",
+                    f"{pair_data['emoji2']} {pair_data['name2']}"
+                ]
+                st.session_state[f"ticket_amount_{new_index}"] = 10000.0
+                persist_ticket_draft()
+                st.success(f"ดึงคู่ {pair_data['name1']} + {pair_data['name2']} เข้าฟอร์มบิลแล้ว")
+                st.rerun()
+        
+        st.caption(f"ออกคู่กัน: {pair_data['co_occurrence_count']} ครั้ง ({pair_data['co_occurrence_rate']:.1f}%)")
+        st.divider()
+
+
 def render_betting_form(db: dict, betting_data: dict) -> None:
     st.subheader("🧾 สร้างบิลการซื้อ")
     if not db["draws"]:
         st.warning("ยังไม่มีงวดในคลัง — เพิ่มงวดที่หน้า Data Management ก่อน")
         return
     st.caption("1 บิลเพิ่มได้หลายชุด: เดี่ยวจ่าย x3/x6/x9 ตามจำนวนที่ออก และคู่จ่าย x6 เมื่อออกครบทั้งคู่")
+    
+    # เพิ่มส่วน Co-occurrence Analysis
+    render_pair_recommendations(db)
+    
+    st.divider()
+    
     draw_options = [item["id"] for item in sorted(db["draws"], key=lambda item: item["id"], reverse=True)]
     load_draft_into_state(draw_options)
     editing = next((item for item in betting_data["tickets"] if item["id"] == st.session_state.get("edit_ticket_id")), None)

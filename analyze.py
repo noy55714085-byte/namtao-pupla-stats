@@ -724,6 +724,82 @@ def leaderboard_metrics(db: dict, min_history: int = 20) -> dict:
     return leaderboard
 
 
+def co_occurrence_matrix(draws: list[dict]) -> dict[tuple[int, int], int]:
+    """คำนวณ Co-occurrence Matrix - ความถี่ที่สัญลักษณ์ออกคู่กัน"""
+    co_occurrence = Counter()
+    
+    for draw in draws:
+        dice = draw["dice"]
+        # สร้างคู่ทั้งหมดที่เป็นไปได้จาก 3 ลูก
+        pairs = [
+            (min(dice[0], dice[1]), max(dice[0], dice[1])),
+            (min(dice[0], dice[2]), max(dice[0], dice[2])),
+            (min(dice[1], dice[2]), max(dice[1], dice[2]))
+        ]
+        co_occurrence.update(pairs)
+    
+    return dict(co_occurrence)
+
+
+def calculate_pair_ranking(db: dict, individual_prob: dict[int, float]) -> list[dict]:
+    """คำนวณ Pair Ranking โดยผสม Co-occurrence กับ Individual Probability"""
+    draws = db["draws"]
+    
+    if len(draws) < 10:
+        return []
+    
+    # คำนวณ Co-occurrence Matrix
+    co_occurrence = co_occurrence_matrix(draws)
+    total_draws = len(draws)
+    
+    # สร้างคู่ทั้งหมดที่เป็นไปได้ (15 คู่)
+    all_pairs = []
+    for i in range(1, 7):
+        for j in range(i + 1, 7):
+            all_pairs.append((i, j))
+    
+    # คำนวณคะแนนรวมสำหรับแต่ละคู่
+    pair_rankings = []
+    
+    for pair in all_pairs:
+        sym1, sym2 = pair
+        
+        # Co-occurrence Score
+        co_occ_count = co_occurrence.get(pair, 0)
+        co_occ_score = co_occ_count / total_draws if total_draws > 0 else 0
+        
+        # Individual Probability Score (เฉลี่ยของทั้ง 2 สัญลักษณ์)
+        individual_score = (individual_prob[sym1] + individual_prob[sym2]) / 2
+        
+        # Combined Score (ผสม 70% Co-occurrence + 30% Individual)
+        combined_score = 0.7 * co_occ_score + 0.3 * (individual_score / 100)
+        
+        pair_rankings.append({
+            "pair": pair,
+            "symbol1": sym1,
+            "symbol2": sym2,
+            "emoji1": SYMBOL_EMOJI[sym1],
+            "emoji2": SYMBOL_EMOJI[sym2],
+            "name1": SYMBOLS[sym1],
+            "name2": SYMBOLS[sym2],
+            "co_occurrence_count": co_occ_count,
+            "co_occurrence_rate": co_occ_score * 100,
+            "individual_avg_prob": individual_score,
+            "combined_score": combined_score * 100
+        })
+    
+    # จัดอันดับตาม Combined Score
+    pair_rankings.sort(key=lambda x: x["combined_score"], reverse=True)
+    
+    return pair_rankings
+
+
+def get_top_pairs(db: dict, individual_prob: dict[int, float], top_n: int = 3) -> list[dict]:
+    """คืนค่า Top N คู่ที่มีโอกาสสูงสุด"""
+    pair_rankings = calculate_pair_ranking(db, individual_prob)
+    return pair_rankings[:top_n]
+
+
 def face_share(dice_lists: list[list[int]]) -> dict[int, float]:
     c = Counter()
     n = 0

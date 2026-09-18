@@ -12,6 +12,7 @@ from analyze import (
     SYMBOLS,
     detailed_backtest_matrix,
     detailed_model_breakdown,
+    get_top_pairs,
     leaderboard_metrics,
     load,
     multi_model_backtest,
@@ -156,6 +157,76 @@ def render_detailed_breakdown(db: dict, slot: str) -> None:
                 f"<div class='hint'>ระดับความมั่นใจของโมเดลนี้</div></div>",
                 unsafe_allow_html=True,
             )
+
+
+def render_co_occurrence_analysis(db: dict, slot: str) -> None:
+    """แสดงผล Co-occurrence Matrix Analysis สำหรับคู่แทง"""
+    pred = multi_model_predict(db, None if slot == "อัตโนมัติ (งวดถัดไป)" else slot)
+    
+    if pred["next_id"] is None:
+        st.warning("ยังไม่มีประวัติในคลัง — เพิ่มงวดแรกที่หน้า Data Management")
+        return
+    
+    st.subheader("🎲 วิเคราะห์การจับคู่ด้วย Co-occurrence Matrix")
+    st.caption("คำนวณสถิติว่าสัญลักษณ์ใดบ้างที่มักจะ 'ออกคู่กันในงวดเดียวกัน' บ่อยที่สุด")
+    
+    # ใช้คะแนนจาก Ensemble Model เป็นฐาน
+    ensemble_prob = pred["models"]["ensemble"]
+    
+    # คำนวณ Top 3 คู่
+    top_pairs = get_top_pairs(db, ensemble_prob, top_n=3)
+    
+    if not top_pairs:
+        st.warning("ข้อมูลยังไม่เพียงพอสำหรับวิเคราะห์การจับคู่ (ต้องมีอย่างน้อย 10 งวด)")
+        return
+    
+    # แสดง Top 3 คู่เด็ด
+    st.markdown("### 🏆 Top 3 คู่เด็ดประจำงวด")
+    
+    for i, pair_data in enumerate(top_pairs, 1):
+        col1, col2, col3, col4 = st.columns([1, 2, 2, 2])
+        
+        with col1:
+            st.markdown(f"#### {i}")
+        
+        with col2:
+            st.markdown(f"**{pair_data['emoji1']} {pair_data['name1']} + {pair_data['emoji2']} {pair_data['name2']}**")
+        
+        with col3:
+            st.metric(
+                "คะแนนรวม",
+                f"{pair_data['combined_score']:.1f}%",
+                help=f"Co-occurrence: {pair_data['co_occurrence_rate']:.1f}% + Individual: {pair_data['individual_avg_prob']:.1f}%"
+            )
+        
+        with col4:
+            st.metric(
+                "ออกคู่กัน",
+                f"{pair_data['co_occurrence_count']} ครั้ง",
+                help=f"อัตราการออกคู่กัน: {pair_data['co_occurrence_rate']:.1f}%"
+            )
+        
+        st.caption(f"Co-occurrence Rate: {pair_data['co_occurrence_rate']:.1f}% | Individual Avg Prob: {pair_data['individual_avg_prob']:.1f}%")
+        st.divider()
+    
+    # แสดงตารางคู่ทั้งหมด
+    st.markdown("### 📊 ตารางคะแนนคู่ทั้งหมด (All 15 Pairs)")
+    
+    all_pairs = calculate_pair_ranking(db, ensemble_prob)
+    
+    # สร้าง DataFrame สำหรับแสดง
+    pair_data = []
+    for pair in all_pairs:
+        pair_data.append({
+            "คู่": f"{pair['emoji1']} {pair['name1']} + {pair['emoji2']} {pair['name2']}",
+            "คะแนนรวม (%)": f"{pair['combined_score']:.1f}%",
+            "ออกคู่กัน (ครั้ง)": pair['co_occurrence_count'],
+            "อัตรา Co-occurrence (%)": f"{pair['co_occurrence_rate']:.1f}%",
+            "ค่าเฉลี่ยความน่าจะเป็น (%)": f"{pair['individual_avg_prob']:.1f}%"
+        })
+    
+    pair_df = pd.DataFrame(pair_data)
+    st.dataframe(pair_df, width="stretch", hide_index=True, use_container_width=True)
 
 
 def render_backtest_results(db: dict) -> None:
@@ -328,6 +399,11 @@ def render_predictor_page(db: dict) -> None:
     
     # แสดงผลการทำนายแบบละเอียด
     render_detailed_breakdown(db, slot)
+    
+    st.divider()
+    
+    # แสดงผล Co-occurrence Analysis
+    render_co_occurrence_analysis(db, slot)
     
     st.divider()
     
