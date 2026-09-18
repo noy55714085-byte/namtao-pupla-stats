@@ -1,0 +1,12 @@
+{
+  "draw_id": 36260209,
+  "currency": "LAK",
+  "rows": [
+    {
+      "type": "single",
+      "symbols": [],
+      "amount": 10000.0
+    }
+  ],
+  "edit_ticket_id": null
+}
